@@ -1,0 +1,589 @@
+---
+title: "Term Project, Short RMD File"
+author: "Max Snyder and Gordon Kamer"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+DF <- read.csv("anes_timeseries_2016_short.csv")  # Dataframe (POINT)
+
+# Professional-looking software engineering (POINT)
+# (these functions are used later)
+cleanFT <- function(ft) { is.integer(ft) & 0 <= ft & ft <= 100 }  # boolean to clean a feeling thermometer column
+
+extractInt <- function(string) { strtoi(substr(string, 1, 1)) }   # extracts 1-digit integer from string
+
+percent.right <- function(model, data_frame, actual)              # calculates percent of prediction model correct
+{
+  comparison_points <- cbind(predict(model,data_frame,type="resp"), actual, factor=.3)
+  comparison_points <- na.omit(comparison_points)
+  correct <- numeric(nrow(comparison_points))
+  for (i in 1:length(correct))
+  {
+    if(((comparison_points[i,1] >= .5) && (comparison_points[i,2] == 1)) || ((comparison_points[i,1] <= .5) && (comparison_points[i,2] == 0)))
+    {
+      correct[i] <- 1
+    }
+    else
+    {
+      correct[i] <- 0
+    }
+  }
+  sum(correct) / length(correct)
+}
+```
+
+Our term project uses the 2016 Time Series Study by the American National Election Survey, which can be found at <https://electionstudies.org/project/2016-time-series-study/>. This survey involved 4270 respondents who answered a large array of questions before and after they voted in the 2016 election -- the original dataset had 1837 columns of various types of data (we cut it to 34 to save space for the upload). This plethora of statistics allowed us to analyze various factors that affected the results of the election. We embarked on four in-depth studies:
+
+1. Comparing voter enthusiasm toward Clinton and Trump
+2. Analyzing the belief that Obama is Muslim
+3. Modeling the probability of a Trump vote
+4. Finding correlation between opinions on policies
+
+Here is the barplot for the 2016 election. Notice that the sample is basically a good representation of the national electorate.
+
+```{r study1_2, echo=FALSE}
+# clean it up
+DF_BarplotClean2 <- DF$V162034a[(DF$V162034a == '1. Hillary Clinton' | DF$V162034a == '2. Donald Trump' | DF$V162034a == '3. Gary Johnson' | DF$V162034a == '4. Jill Steiin')]
+
+barplot(table(droplevels(DF_BarplotClean2)), main="Clinton vs. Trump vs. Johnson vs. Stein", ylab="Respondents", col=c("blue","red", "darkblue", "green"))
+```
+
+
+## Study #1
+#### Clinton vs. Trump 2016
+
+We first use linear regression to model the relationship between respondents' "feeling thermometer" score (1-100) for the two major party candidates.
+
+```{r study2_1, echo=FALSE}
+# STUDY #2
+# The relationship between the support for the two major candidates
+
+# We first use linear regression to model the relationship between respondent's "feeling thermometer" score (1-100)
+# for Clinton and for Trump.
+
+# Cleaning
+ftDem <- DF$V161086; ftRep <- DF$V161087
+data <- cbind(ftDem, ftRep)
+data <- data[cleanFT(ftDem) & cleanFT(ftRep),]
+ftDem <- data[,1]; ftRep <- data[,2]
+
+# Use of linear regression (POINT)
+LR <- lm(ftRep ~ ftDem)
+plot(ftDem, ftRep, main = "Feeling Thermometers: Trump vs. Clinton", xlab = "Clinton", ylab = "Trump", col = "gray")
+
+# There is a clear negative relationship, which is expected
+abline(LR, col = "red")
+```
+
+There is a clear negative relationship between the two, which is expected. We found that a slightly better model, in fact, was exponential decay. Here is the graph:
+
+```{r study 2_1_2, echo=FALSE}
+# If we try exponential decay (i.e. y = ae^(-bx)), here are the results:
+x <- replace(ftDem, ftDem == 0, 0.0001); y <- replace(ftRep, ftRep == 0, 0.0001)
+a_start <- 50; b_start <- 1
+
+m <- nls(y ~ a*exp(-b*x), start=list(a=a_start,b=b_start))
+#cor(y, predict(m))  # much higher correlation!
+
+# A graphical display that is different from those in the class scripts (POINT)
+plot(y ~ x, main = "Feeling Thermometers: Trump vs. Clinton", xlab = "Clinton", ylab = "Trump", col = "grey")
+lines(x,predict(m),col="red", type="p")  # here is the exponential decay model
+```
+
+This model fits better (slightly higher correlation), likely because the high amount of "0" responses for both candidates pulls the line of best fit towards the axes.
+
+We continue with a permutation test to discover if Clinton voters gave her a higher feeling thermometer rating than Trump voters did for Trump. The observed difference of (Clinton - Trump) between their respective voters was:
+
+```{r study2_2, echo=FALSE}
+
+# Now, we're going to do a permutation test
+# We're interested in if Hillary Clinton voters liked Hillary Clinton more than Trump voters liked Trump
+# We're going to compare the means of the survey's feeling thermometer (score from 1-100) on each candidate
+
+dName <- "1. Hillary Clinton"
+rName <- "2. Donald Trump"
+
+votes <- DF$V162034a  # vote for president
+ftDem <- DF$V161086  # thermometer for Clinton
+ftRep <- DF$V161087  # thermometer for Trump
+
+# Cleaning
+data <- cbind(votes, ftDem, ftRep)
+data <- data[!is.na(votes) & ((votes == dName & cleanFT(ftDem)) | (votes == rName & cleanFT(ftRep))),]
+
+# More cleaning
+votes <- data[,1]; ftDem <- data[,2]; ftRep <- data[,3]; ft <- numeric(length(votes))
+dName <- 6; rName <- 7
+for (i in 1:length(votes))
+{ if (votes[i] == dName) {ft[i] <- data[i,2]} else {ft[i] <- data[i,3]} }
+
+DemAvg <- sum(ft[votes == dName])/sum(votes == dName)  # Clinton mean
+RepAvg <- sum(ft[votes == rName])/sum(votes == rName)  # Trump mean
+
+observed <- DemAvg - RepAvg; observed  # observed difference in means is about 2.5
+```
+
+Here is the histogram of the permutation test's 50000 differences of (Clinton - Trump) feeling thermometer scores. The blue curve is a normal distribution overlayed (guaranteed by CLT) and the red line indicates the observed difference of ~2.5 points.
+
+```{r study2_3, echo=FALSE}
+# Permutation test (POINT)
+N <- 50000; diffs <- numeric(N)
+for (i in 1:N)
+{
+  Candidate <- sample(votes)
+  DemAvg <- sum(ft*(Candidate==dName))/sum(Candidate==dName); DemAvg
+  RepAvg <- sum(ft*(Candidate==rName))/sum(Candidate==rName); RepAvg
+  diffs[i] <- DemAvg - RepAvg
+}
+
+# Histogram (POINT)
+hist(diffs, breaks = "FD", probability = T, main = "Permutation Test: Clinton minus Trump Feeling Therm.", xlab = "Clinton - Trump", ylab = "Probability Density")  # histogram of sample means, if candidates were random
+abline(v = observed, col = "red")  # observed difference in means
+
+# Probability Density Graph overlaid on a Histogram (POINT)
+# Because of the CLT, we can overlay a normal distribution with the sample mean and standard deviation
+curve(dnorm(x, mean = 0, sd = sd(diffs)), col = "blue", add = T)
+```
+
+This difference of ~2.5 points out of 100 is predicted with the following p-value on a 1-sided test (predicting Clinton > Trump):
+
+```{r study2_4, echo=FALSE}
+# Calculating P value (POINT)
+pvalue <- (sum(diffs >= observed)+1)/(N+1); pvalue  # the probability a difference as large arose by chance
+# Because the p value is so low (p < .005), we can call this result statistically significant (there is a difference)
+
+# We can conclude that Hillary voters liked Hillary MORE than Trump's liked Trump on average
+# It suggests that Republicans might have held their nose and voted for Trump, while Hillary voters liked her more
+# This result is surprising in comparison to the media coverage on the topic
+```
+
+We can conclude that Hillary voters liked Hillary MORE than Trump's liked Trump on average. It suggests that Republicans might have held their nose and voted for Trump, while Hillary voters liked her more. This result is surprising in comparison to the media coverage on the topic.
+
+## Study #2
+#### Belief that Obama is Muslim
+
+We used contingency tables to analyze the relationship between party ID, belief in vaccines, and sentiment on the economy with the belief on whether or not Obama is Muslim. Here are the tables:
+
+```{r study3_1, echo=FALSE}
+# STUDY #3
+# Exploring the liklihood that a voter believes that Obama is a Muslim
+
+# clean up table to only get yes/no to the muslim question and only democrats and republicans
+# While it does eliminate people who are unsure, most people are not unsure,
+# and the rest of the people eliminated are those who did not have a post election interview - a basically random subset
+# While it elimiantes third parties, we're really just concerned with the democrat/republican split
+# So this seems fairly representative
+
+DF_TableClean <- DF[(DF$V162255 == '1. Muslim' | DF$V162255 == '2. Not a Muslim') & (DF$V161019 == '1. Democratic party' | DF$V161019 == '2. Republican party') ,]
+
+muslim <- droplevels(DF_TableClean$V162255)
+party <- droplevels(DF_TableClean$V161019)
+
+# Contingency table (POINT)
+tbl <- table(muslim,party); tbl
+```
+
+Percentage of Democrats who answered Muslim:
+```{r study3_2, echo=FALSE}
+tbl[1,1] / (tbl[1,1] + tbl[2,1])  # percentage of democrats (who answered yes/no) who answered Muslim
+# But it's a bit surprising that so many democrats responded "Muslim" (although, remember, eliminating the unsure responses, even though there are only few)
+```
+
+Percentage of Republicans who answered Muslim:
+```{r study3_3, echo=FALSE}
+tbl[1,2] / (tbl[1,2] + tbl[2,2])  # percentage of republicans (who answered yes/no) who said Obama is a Muslim
+# Maybe this idea is not so fringe... a little surprising
+```
+
+There are appears to be a relationship between being a republican and believing Obama is a Muslim. Using a chi-square test, we analyze this relationship:
+
+```{r study3_4, echo=FALSE}
+
+# There are appears to be a relationship between being a republican and believing Obama is a Muslim
+
+# Analaysis of contingency table: chi square (POINT)
+chi <- chisq.test(muslim, party)
+chi
+```
+
+Now let's compare beliefs about vaccines and a respondent's view on whether Obama is a Muslim.
+
+```{r study3_5, echo=FALSE}
+# Let's compare this to something else - how about belief in mandatory vaccination at schools
+
+# Cleaning
+DF_TableClean <- DF[(DF$V162146 == "1. Favor" | DF$V162146 == "2. Oppose") & (DF$V162255 == '1. Muslim' | DF$V162255 == '2. Not a Muslim'),]
+muslim <- droplevels(DF_TableClean$V162255)
+vaccines <- droplevels(DF_TableClean$V162146)
+
+# contingency table
+tbl <- table(muslim,vaccines); tbl
+```
+
+Percentage of those who favor vaccines who answered Muslim:
+```{r study3_6, echo=FALSE}
+tbl[1,1] / (tbl[1,1] + tbl[2,1])  # proportion of those who favor vaccines who believe Obama is a Muslim
+```
+
+Percentage of those who oppose vaccines who answered Muslim:
+```{r study3_7, echo=FALSE}
+tbl[1,2] / (tbl[1,2] + tbl[2,2])  # proportion of those who oppose vaccines who believe Obama is a Muslim
+```
+
+If you oppose vaccines, you are far more likely to believe that Obama is a Muslim. The p value showing that this relationship is significant: 
+
+```{r study3_8, echo=FALSE}
+chi <- chisq.test(muslim, vaccines); 
+chi$p.value  # and it's significant once again! (p < 1.0e-5)
+```
+
+OK - now what about views on the economy? Are the "forgotten men and women" - who believe the economy has gotten worse since 2008 - more like to believe Obama is a Muslim?
+
+Let's take only people who answered "better" or "worse" - leaving out people who say "about the same", for the simplicity of the table
+
+```{r study3_9, echo=FALSE}
+DF_TableClean <- DF[(DF$V161235 == "1. Better" | DF$V161235 == "2. Worse") & (DF$V162255 == '1. Muslim' | DF$V162255 == '2. Not a Muslim'),]
+muslim <- droplevels(DF_TableClean$V162255)
+economy <- droplevels(DF_TableClean$V161235)
+
+# contingency table
+tbl <- table(muslim,economy); tbl
+```
+
+Here is the percentage of those who believe the economy has gotten better who believe Obama is a Muslim:
+
+```{r study3_10, echo=FALSE}
+tbl[1,1] / (tbl[1,1] + tbl[2,1])  # proportion of those who believe the economy has gotten better who believe Obama is a Muslim
+```
+
+Here is the percentage of those who believe the economy has gotten worse who believe Obama is a Muslim:
+
+```{r study3_11, echo=FALSE}
+tbl[1,2] / (tbl[1,2] + tbl[2,2])  # proportion of those who believe the economy has gotten worse who believe Obama is a Muslim
+```
+
+The difference here is even MORE striking than the party comparison! Here is the p-value:
+
+```{r study3_12, echo=FALSE}
+chi <- chisq.test(muslim, economy); 
+chi$p.value  # and it's significant once again, obviously! (p < 1.0e-113) - holy cow
+
+```
+
+As you can see, we have very strong statistical proof (p < .001) that each of variables are correlated with beliefs about whether Obama is a Muslim. The most related variable in this study is not party ID but in fact belief about the strength of the economy since 2008, which is surprising.
+
+## Study #3
+#### Predicting Probability of a Trump Vote
+
+We attempted to see if we can predict if someone is going to vote for Trump before that person even steps foot in the ballot box. This is incredibly important for political campaigns, and many campaigns have models that attempt to do this.
+
+First, we did a simple logistic regression curve using only the self-reported **liberal/conservative placement on a 7 point scale**. While in this case, it may make more sense just to look at the probabilites for each specific score, this approach works much better when we put many more variables into the model.
+
+
+```{r study4_1, echo=FALSE}
+# STUDY #4
+# Modeling the likelihood that a respondent voted for Trump.
+
+# Basically, let's see if we can predict if someone is going to vote for Trump before that person even steps foot in the ballot box
+# This is incredibly important for political campaigns, and many campaigns have models that attempt to do this.
+
+# First, let's do a simple logistic regression curve using only the self-reported liberal/conservative placement on a 7 point scale
+# While in this case, it may make more sense just to look at the probabilites for each specific score, this approach will work better when we put many more variables into the model
+
+# Let's extract the two columns we care about: the respondent's vote for president and the liberal/conservative score
+# We also filter to make sure we get an answer on the liberal/conservative score (we accept the loss of leaving out people who haven't thought about it much)
+libcon <- DF$V161126[(DF$V161126 == "1. Extremely liberal" | DF$V161126 == "2. Liberal" | DF$V161126 == "3. Slightly liberal" | DF$V161126 == "4. Moderate, middle of the road" | DF$V161126 == "5. Slightly conservative" | DF$V161126 == "6. Conservative" | DF$V161126 == "7. Extremely conservative")]
+trumpvote <- as.numeric((DF$V162034a == "2. Donald Trump")[(DF$V161126 == "1. Extremely liberal" | DF$V161126 == "2. Liberal" | DF$V161126 == "3. Slightly liberal" | DF$V161126 == "4. Moderate, middle of the road" | DF$V161126 == "5. Slightly conservative" | DF$V161126 == "6. Conservative" | DF$V161126 == "7. Extremely conservative")])
+DF_SimpleLog <- data.frame(libcon, trumpvote)
+
+DF_SimpleLog$libcon <- strtoi(substr(DF_SimpleLog$libcon, 1, 1))  # convert libcon to an integer
+
+#head(DF_SimpleLog)
+
+fit <- glm(trumpvote~libcon,data=DF_SimpleLog,family=binomial())  # making the model
+#summary(fit)
+
+# Calculating and graphing logistic regression curve (POINT)
+# Drawing a graph the old fashion way, using the coefficients
+co1 <- as.numeric(fit$coefficients[1])
+co2 <- as.numeric(fit$coefficients[2])
+#curve(exp(co1+co2*x) / (1+exp(co1+co2*x)), col = "blue", xlim=c(0,10)) # NOTE: Data is from 1 to 7, but we use 0 to 10 here just to show the full shape of the curve
+# and now a way that R has, which is the same
+curve(predict(fit,data.frame(libcon=x),type="resp"), xlim=c(0,10), main = "Logistic Regression: P(Trump Vote)", xlab = "Liberal --> Conservative Scale (1-7)", ylab = "P(Trump Vote)", col = "red")
+```
+
+Overlaying the actual data (using a "jitter" offset to make it easier to see density of data), we see the following:
+
+```{r study4_2, echo=FALSE}
+# Now let's overlay the actual data
+# to make it fit better on the screen, we're going to take samples of the data
+ill_sample <- sample(1:nrow(DF_SimpleLog), 500);
+ill_sample <- DF_SimpleLog[ill_sample,]; #head(ill_sample)
+# we use jitter to make it easier to see
+plot(jitter(ill_sample$libcon, factor=.5),jitter(ill_sample$trumpvote, factor=.5), xlim=c(1,7), main = "Trump Vote for Lib/Con Scale", xlab="Liberal/Conservative", ylab="Voted for Trump")
+
+curve(exp(co1+co2*x) / (1+exp(co1+co2*x)), col = "blue", xlim=c(1,7), add=TRUE)
+```
+
+This curve does a somewhat good job, but we moved on to a more robust model. We included the following **political variables** in our analysis:
+
+1. Liberal/Conservative 7pt scale - V161126
+2. Party ID - V161158x
+3. How to select justices for the Supreme Court - V161176
+4. Build a wall - V161196/V161196a
+5. Trust in washington - V161215
+6. Is global warming happening - V161221
+7. Gay marriage - V161231
+8. Is bible the word of God or men - V161243
+9. Days in week that you watch news - V161008
+10. Should illegal aliens be sent back - V161195
+11. Is economy better off since 2008 - V161235
+
+```{r study4_3, echo=FALSE}
+# Does an OK job, but now let's move on to the more robust (but less graphically intuitive) version of the model
+
+# Included variables:
+
+# liberal/conservative 7pt scale - V161126
+# Party ID - V161158x
+
+# How to select justices for the Supreme Court - V161176
+# Build a wall - V161196/V161196a
+# Trust in washington - V161215
+# Is global warming happening - V161221
+# Gay marriage - V161231
+# Is bible the word of God or men - V161243
+# Days in week that you watch news - V161008
+# Should illegal aliens be sent back - V161195
+# Is economy better off since 2008 - V161235
+
+
+# DATA CLEANING
+# Most of this is converting the string responses into 1 number integers
+DF_Log <- DF
+
+# Vote for trump
+DF_Log$V162034a <- extractInt(DF_Log$V162034a)
+DF_Log$V162034a <- as.numeric((DF_Log$V162034a == 2))
+
+# liberal/conservative spectrum
+DF_Log$V161126 <- extractInt(DF_Log$V161126)
+DF_Log <- DF_Log[DF_Log$V161126 != 9,]
+
+# party ID
+DF_Log$V161158x <- extractInt(DF_Log$V161158x)
+
+# Supreme court
+DF_Log$V161176 <- extractInt(DF_Log$V161176)
+
+# Build a wall - switching 2s and 3s because 3 in the original dataset is the middle position
+DF_Log$V161196 <- extractInt(DF_Log$V161196)
+DF_Log$V161196 <- replace(DF_Log$V161196, DF_Log$V161196 == 2, 4)
+DF_Log$V161196 <- replace(DF_Log$V161196, DF_Log$V161196 == 3, 2)
+DF_Log$V161196 <- replace(DF_Log$V161196, DF_Log$V161196 == 4, 3)
+
+# Trust in washington
+DF_Log$V161215 <- extractInt(DF_Log$V161215)
+
+# Global warming
+DF_Log$V161221 <- extractInt(DF_Log$V161221)
+
+# Gay marriage - V161231
+DF_Log$V161231 <- extractInt(DF_Log$V161231)
+
+# Bible - V161243
+DF_Log$V161243 <- extractInt(DF_Log$V161243)
+DF_Log <- DF_Log[DF_Log$V161243 != 5,]
+
+# Days in week watch news - V161008
+DF_Log$V161008 <- extractInt(DF_Log$V161008)
+
+# Should illegal aliens be sent back - V161195
+DF_Log$V161195 <- extractInt(DF_Log$V161195)
+
+# Is economy better off since 2008 - V161235
+DF_Log$V161235 <- extractInt(DF_Log$V161235)
+DF_Log$V161235 <- replace(DF_Log$V161235, DF_Log$V161235 == 2, 4)
+DF_Log$V161235 <- replace(DF_Log$V161235, DF_Log$V161235 == 3, 2)
+DF_Log$V161235 <- replace(DF_Log$V161235, DF_Log$V161235 == 4, 3)
+
+# Now to the model
+fit <- glm(V162034a~V161235+V161195+V161126+V161158x+V161176+V161196+V161215+V161221+V161231+V161243+V161008,data=DF_Log,family=binomial())  # making the model
+#summary(fit)
+
+# Now we can see how good the fit was (again, using jitter to make graphically better)
+# We graph the model's prediction on the x axis with whether or not the respondent voted for Trump on the y
+comparison_points_j <- cbind(predict(fit,DF_Log,type="resp"), jitter(DF_Log$V162034a, factor=.3))
+plot(comparison_points_j, main = "P(Trump Vote)", ylab="Voted for Trump", xlab="Predicted Probability")
+```
+
+As you can see, the density of points in the top right and bottom left corners of the plot indicate graphically that the model is doing a decent job.
+
+What percentage of the time does the model get it correct (threshold = 50%)?
+
+```{r study4_4, echo=FALSE}
+# As you can see, the density of points in the top right and bottom left corners of the plot indicate graphically that the model is doing a decent job
+
+# What percentage of the time does the model get it right, with a threshold of 50%?
+percent.right(fit, DF_Log, DF_Log$V162034a)  # percent right
+```
+
+This model is correct more than 90% of the time! However, we decided to incorporate a number of **NON-political variables** as well:
+
+Whether the respondent watches/reads:
+
+  12. Hannity - V161370
+  13. Rachel Maddow - V161393
+  14. NYTimes - V161451
+  15. Modern Family - V161373
+  16. Sunday Night Football - V161376
+  17. House of Cards - V161385
+  18. Game of Thrones - V161389
+
+~ ~ ~ ~
+
+19. How often respondent attends church - V161245
+20. Is the respondent white, black, or latino (doesn't count other but doens't leave them out)
+
+Percentage that this **new** model is correct:
+
+```{r study4_5, echo=FALSE}
+# The model is correct quite a bit (>90%)!
+
+# Note: we could have just trained the model using half of the dataset and then compared with the other half in order to avoid overfitting
+# Besides the fact that this seems outside the scope of this course, it seems unlikely to have overfitting here
+# since there's a logical connection between the variables, and there aren't a tremendous amount of unique answers
+
+# What if we add a few non-political variables - will they improve the model?
+
+# Whether the respondent watches/reads:
+# Hannity - V161370
+# Rachel Maddow - V161393
+# NYTimes - V161451
+# Modern family - V161373
+# Sunday night football - V161376
+# house of cards - V161385
+# game of thrones - V161389
+
+# How often respondent attends church - V161245
+# Is the respondent white, black, or latino (doesn't count other but doens't leave them out)
+
+# Hannity - V161370
+DF_Log$V161370 <- extractInt(DF_Log$V161370)
+
+# Rachel Maddow - V161393
+DF_Log$V161393 <- extractInt(DF_Log$V161393)
+
+# NYTimes - V161451
+DF_Log$V161451 <- extractInt(DF_Log$V161451)
+
+# Modern family - V161373
+DF_Log$V161373 <- extractInt(DF_Log$V161373)
+
+# Sunday night football - V161376
+DF_Log$V161376 <- extractInt(DF_Log$V161376)
+
+# house of cards - V161385
+DF_Log$V161385 <- extractInt(DF_Log$V161385)
+
+# game of thrones - V161389
+DF_Log$V161389 <- extractInt(DF_Log$V161389)
+
+# How often respondent attends church - V161245
+DF_Log$V161245 <- extractInt(DF_Log$V161245)
+
+# Is respondent latino
+DF_Log$V161309 <- extractInt(DF_Log$V161309)
+
+# Is respondent white
+DF_Log$V161310a <- extractInt(DF_Log$V161310a)
+
+# Is respondent black
+DF_Log$V161310b <- extractInt(DF_Log$V161310b)
+
+new_fit <- glm(V162034a~V161310b+V161310a+V161309+V161245+V161389+V161385+V161376+V161373+V161451+V161393+V161370+V161235+V161195+V161126+V161158x+V161176+V161196+V161215+V161221+V161231+V161243+V161008,data=DF_Log,family=binomial())  # making the model
+#summary(new_fit)
+
+percent.right(new_fit, DF_Log, DF_Log$V162034a)  # new
+# percent.right(fit, DF_Log, DF_Log$V162034a)      # old
+
+# Very modest improvement (based on percent right) - algorithm is minimizing the sum of the squares of the residuals, though, so this need not be the case
+# The significance is in the P(>|z|) column with stars on the right indicating the significance level - determining whether the factor impacts the model (is the coefficient != 0)
+# It seems from the summary analysis that the only race that mattered was being white (being blcak or latino were not salient)
+
+# (POINT) ^^ unexpectedly not significant relationship (p = about .42 for black, p = about .45 for latino),
+# might be due to the fact that the things that make these groups vote the way they do are picked up in other variables
+
+# It also looks like the only media that added to the modelsignificantly were Modern Family and the NYTimes, both with negative coefficients
+# Which is interesting: If you watch Modern Family, I can predict that you're more likely to not vote for Trump
+
+# (POINT) ^^unexpectedly significant! (p < .05, though perhaps the built-in test is bad because the underlying data are perhaps not normal)
+```
+
+This was a very modest improvement, but an improvement nonetheless. Some interesting findings from this study:
+
+1. It seems from the summary analysis that the only race that mattered was being white or not (being Black or Latino was not salient).
+2. It also looks like the only media that added to the model significantly were Modern Family and the NYTimes, both with negative coefficients. This is interesting: if you watch Modern Family, we can predict that you're more likely to not vote for Trump.
+
+## Study #4
+#### Correlation between Policies
+
+Given that you like government spending on healthcare, what do you think about defense spending? The survey includes at least four variables which respondents give on a 7 point scale:
+
+1. Defense Spending
+2. Healthcare
+3. The Environment
+4. Government Services Spending
+
+Before we start, here are histograms that reflect the ideological distribution on these issues among respondents:
+
+```{r study5_1, echo=FALSE}
+# STUDY #5
+# Potential correlation between views on particular policies with other policies
+
+# Given that you like government spending on healthcare, what do you think about defense spending?
+# The survey includes at least four variables which respondents give on a 7 point scale
+# Three are (1) defense spending, (2) healthcare (3) the environment, and (4) government services spending
+
+# Clean up to only get people who responded to all three - they go conservative (low) to liberal (high)
+# V161181 - defenese spending - 1 (low) to 7 (high)
+# V161184 - private public insurance - 1 (government) to 7 (private)
+# V161201 - environment/jobs tradeoff - 1 (low regulation) to 7 (lots of regulation)
+# V161178 - government spending on services - 1 (less) to 7 (more)
+DF_Cor <- DF[(DF$V161181 >= 1 & DF$V161181 <= 7) & (DF$V161184 >= 1 & DF$V161184 <= 7) & (DF$V161201 >= 1 & DF$V161201 <= 7) & (DF$V161178 >= 1 & DF$V161178 <= 7),]
+
+issue_matrix <- cbind("Defense" = DF_Cor$V161181, "Healthcare" = DF_Cor$V161184, "Environment" = DF_Cor$V161201, "Spending" = DF_Cor$V161178); #head(issue_matrix)
+
+# Here's the ideological distribution on the three issues before we start
+barplot(table(issue_matrix[,1]), main = "Barplot of Defense Spending", xlab = "Decrease -> Increase", col = "red")
+barplot(table(issue_matrix[,2]), main = "Barplot of Healthcare", xlab = "Government -> Private", col = "orange")
+barplot(table(issue_matrix[,3]), main = "Barplot of Environment", xlab = "High Regulation -> Low Regulation", col = "green")
+barplot(table(issue_matrix[,4]), main = "Barplot of Social Services Spending", xlab = "Less -> More", col = "blue")
+```
+
+Here is a correlation matrix between the four variables:
+
+```{r study5_2, echo=FALSE}
+
+# Appropriate use of covariance or correlation (POINT)
+cor(issue_matrix)  # correlation matrix using Pearson's method
+```
+
+It seems like all of the issues are positively correlated with each other - meaning, if you are liberal on one issue, you're probably liberal on another, too. The correlations mostly hover in the .35-.55 range, which is moderate. This is important to get because politicians can take issues are certain stances strategically and pick up more voters.
+
+Here are examples of how beliefs on healthcare interact with two other variables:
+
+```{r study5_3, echo=FALSE}
+plot(jitter(issue_matrix[,1], factor=1), jitter(issue_matrix[,2], factor=1), type="p", main = "Healthcare vs. Defense", xlab = "Defense (Decrease -> Increase)", ylab="Healthcare (Government -> Private)", col = "dark red")
+
+plot(jitter(issue_matrix[,3], factor=1), jitter(issue_matrix[,2], factor=1), type="p", main = "Healthcare vs. Environment", xlab = "Environment (High Regulation -> Low Regulation)", ylab="Healthcare (Government -> Private)", col = "dark green")
+```
+
+No mistake: they're clearly correlated, and the correlation appears linear. This type of analysis illuminates how the parties align on certain issues. Today, our parties mostly reflect the conservative/liberal divide, which is reflected in the correlations between the variables.
+
+## Conclusion
+
+These four sub-studies have revealed telling information about the 2016 election -- all thanks to the statistical tests from Math 23c. Please see the longer .R script for further explanation of these analyses.
